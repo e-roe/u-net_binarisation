@@ -1,20 +1,17 @@
-import os
-# os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-import cv2
-import numpy as np
 from tensorflow.keras.models import *
-from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, UpSampling2D, Dropout, Cropping2D
-from keras.layers import merge
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, UpSampling2D, Dropout
 from tensorflow.keras.layers import concatenate
 from tensorflow.keras.optimizers import *
-from tensorflow.keras.callbacks import ModelCheckpoint, LearningRateScheduler, Callback,  EarlyStopping, ReduceLROnPlateau
-from tensorflow.keras import backend as keras
-from data_docs import *
+from tensorflow.keras.callbacks import ModelCheckpoint, Callback,  EarlyStopping, ReduceLROnPlateau
+import numpy as np
 from matplotlib import pyplot as plt
 from os import makedirs
-import sys
 import pandas as pd
-
+import os
+from skimage.filters import threshold_otsu, threshold_niblack, threshold_sauvola
+from sklearn.metrics import jaccard_similarity_score
+from keras.preprocessing.image import ImageDataGenerator, array_to_img
+import cv2
 
 USE_GPU = True
 IMG_MODEL_SIZE = 256
@@ -33,11 +30,10 @@ def loader(batch_size, train_path, image_folder, mask_folder, mask_color_mode="g
                                                       batch_size=batch_size, save_to_dir=save_to_dir, seed=1)
     train_generator = zip(image_generator, mask_generator)
     for (img, mask) in train_generator:
-        # img, mask = get_data(img, mask)
         yield (img, mask)
 
+
 def check_gpu():
-    import os
     if USE_GPU:
         import tensorflow as tf
         physical_devices = tf.config.list_physical_devices('GPU')
@@ -45,7 +41,6 @@ def check_gpu():
         os.environ['TF_DETERMINISTIC_OPS'] = '1'
     else:
         os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-
 
 
 class myUnet(Callback):
@@ -57,15 +52,10 @@ class myUnet(Callback):
         self.counter = 0
 
     def on_epoch_end(self, epoch, logs=None):
+        # Code here what you want each time an epoch ends
         print('--- on_epoch_end ---')
         #self.save_epoch_results()
 
-    def load_data(self):
-        mydata = dataProcess(self.img_rows, self.img_cols)
-        imgs_train, imgs_mask_train = mydata.load_train_data()
-        imgs_test = mydata.load_test_data()
-
-        return imgs_train, imgs_mask_train, imgs_test
 
     def get_unet(self):
 
@@ -145,81 +135,20 @@ class myUnet(Callback):
         return model
 
 
-    def train(self):
-
-        print("loading data")
-        imgs_train, imgs_mask_train, imgs_test = self.load_data()
-        print(imgs_test.shape)
-        test_img = cv2.imread('D:\\Roe\\Medium\\data\\augmentations\\Originals\\1_17_orig_408.jpg', cv2.IMREAD_GRAYSCALE)
-        # cv2.imshow('', test_img)
-        # cv2.waitKey(0)
-        test_img = test_img.astype('float32')
-        test_img /= 255
-        imgs_test = np.asarray([test_img])
-        imgs_test = imgs_test[..., np.newaxis]
-        print(imgs_test.shape)
-        print("loading data done")
+    def train(self, data_path, checkpoint_file, epochs=50):
         model = self.get_unet()
         print("got unet")
 
-        model_checkpoint = ModelCheckpoint('unet_4605_dataset.hdf5', monitor='loss', verbose=1, save_best_only=True)
+        model_checkpoint = ModelCheckpoint(checkpoint_file, monitor='loss', verbose=1, save_best_only=True)
         early_stopping = EarlyStopping(patience=20, verbose=1)
         reduce_lr = ReduceLROnPlateau(factor=0.1, patience=5, min_lr=0.00001, verbose=1)
         print('Fitting model...')
 
-        ld = loader(1, 'D:\\Roe\\Medium\\data\\augmentations', 'Originals', 'GT')
+        ld = loader(1, data_path, 'Originals', 'GT')
 
-        history = model.fit_generator(ld, epochs=50, verbose=1, validation_steps=0.2, shuffle=True, steps_per_epoch=4605, callbacks=[reduce_lr, early_stopping,model_checkpoint, self])
-        # print(history.history.keys())
-        # plt.plot(history.history['accuracy'])
-        # plt.plot(history.history['loss'])
-        # plt.title('model accuracy')
-        # plt.ylabel('accuracy')
-        # plt.xlabel('epoch')
-        # plt.legend(['train', 'validation'], loc='upper left')
-        # plt.show()
-        # # "Loss"
-        # plt.plot(history.history['loss'])
-        # plt.plot(history.history['val_loss'])
-        # plt.title('model loss')
-        # plt.ylabel('loss')
-        # plt.xlabel('epoch')
-        # plt.legend(['train', 'validation'], loc='upper left')
-        # plt.show()
+        history = model.fit_generator(ld, epochs=epochs, verbose=1, validation_steps=0.2, shuffle=True, steps_per_epoch=4605, callbacks=[reduce_lr, early_stopping,model_checkpoint, self])
 
         pd.DataFrame(history.history).plot(figsize=(8, 5))
-        #plt.show()
-        plt.savefig('D:\\Roe\\Medium\\prjs\\u_net\\results\\graph.png')
-
-        # model.fit(imgs_train, imgs_mask_train, batch_size=4, epochs=20, verbose=1, validation_split=0.2, shuffle=True,
-        #           callbacks=[model_checkpoint, self])
-
-
-        print('Going to predict test data')
-        imgs_mask_test = model.predict(imgs_test, batch_size=1, verbose=1)
-        result = np.zeros([256, 256, 1], dtype=np.uint8)
-        result = imgs_mask_test[0] * 255
-        print(imgs_mask_test.shape)
-        cv2.imwrite('D:\\Roe\\Medium\\prjs\\u_net\\results\\test.jpg', result)
-
-        # cv2.imshow('res', result)
-        # cv2.waitKey(0)
-        #np.save('D:\\Roe\\Medium\\prjs\\u_net\\imgs_mask_test.npy', imgs_mask_test)
-
-    def load_predict(self, model_weights, input_image):
-        print("loading data")
-        imgs_train, imgs_mask_train, imgs_test = self.load_data()
-        print("loading data done")
-        model = self.get_unet()
-        print("got unet")
-        print(imgs_test.shape)
-        cv2.imshow('', imgs_test[0])
-        cv2.waitKey(0)
-        model.load_weights('unet_dibco.hdf5')
-
-        print('predicting test data')
-        imgs_mask_test = model.predict(imgs_test, batch_size=1, verbose=1)
-        np.save('D:\\Roe\\Medium\\prjs\\u_net\\dibco\\images\\results\\imgs_mask_test.npy', imgs_mask_test)
 
     def prepare_image_predict(self, input_image):
         img = cv2.imread(input_image, cv2.IMREAD_GRAYSCALE)
@@ -257,10 +186,6 @@ class myUnet(Callback):
                 border[:remy, :remx] = img[height-remy:height, xinit:width]
                 parts.append(border.astype('float32') / 255)
 
-        # for part in parts:
-        #     cv2.imshow('re', part)
-        #     cv2.waitKey(0)
-
         return np.asarray(parts), (img.shape[0], img.shape[1])
 
 
@@ -292,9 +217,6 @@ class myUnet(Callback):
             if remy > 0:
                 result[height-remy:, xinit:xinit+IMG_MODEL_SIZE] = parts[index][:remy, :remx] * 255
 
-        cv2.imshow('final', cv2.resize(result, (0, 0), fx=0.25, fy=0.25))
-        cv2.waitKey(0)
-
         return result
 
 
@@ -315,14 +237,9 @@ class myUnet(Callback):
 
         print('predicting test data')
         imgs_mask_test = model.predict(parts, batch_size=1, verbose=1)
-        print(imgs_mask_test.shape)
-        for part in imgs_mask_test:
-            cv2.imshow('', part)
-            cv2.waitKey(100)
 
-        result = self.restore_image(imgs_mask_test, dim)
-        cv2.imwrite('D:\\Roe\\Medium\\prjs\\u_net\\results\\bin.png', result)
-        #np.save('D:\\Roe\\Medium\\prjs\\u_net\\dibco\\images\\results\\imgs_mask_test.npy', imgs_mask_test)
+        return self.restore_image(imgs_mask_test, dim)
+
 
     def save_epoch_results(self):
         print("loading data")
@@ -347,14 +264,6 @@ class myUnet(Callback):
             img = array_to_img(img)
             img.save(path + "%d.jpg" % (i))
 
-    def save_img(self):
-        print("array to image")
-        imgs = np.load('D:\\Roe\\Medium\\prjs\\u_net\\results\\imgs_mask_test.npy')
-        for i in range(imgs.shape[0]):
-            img = imgs[i]
-            # self.show_image(img)
-            img = array_to_img(img)
-            img.save("D:\\Roe\\Medium\\prjs\\u_net\\results_new1\\%d.jpg" % (i))
 
     def show_image(self, image, *args, **kwargs):
         title = kwargs.get('title', 'Figure')
@@ -368,34 +277,59 @@ class myUnet(Callback):
         plt.show()
 
 
-# def add_crf_layer(original_model):
-#     original_model.trainable = False
-#
-#     crf_layer = CrfRnnLayer(image_dims=(224, 224),
-#                             num_classes=2,
-#                             theta_alpha=3.,
-#                             theta_beta=160.,
-#                             theta_gamma=3.,
-#                             num_iterations=10,
-#                             name='crfrnn')([original_model.outputs[0], original_model.inputs[0]])
-#
-#     new_crf_model = Model(inputs = original_model.input, outputs = crf_layer)
-#
-#     return(new_crf_model)
+def test_predict(u_net, model):
+    images = os.listdir(os.path.join('..', 'images'))
+    results = []
+    for image in images:
+        ground_truth = cv2.imread(os.path.join('..', 'GT', image[:-3] + 'png'), cv2.IMREAD_GRAYSCALE)
+        current_image = os.path.join('..', 'images', image)
+        result_unet = u_net.binarise_image(model_weights=model, input_image=current_image)
+
+        image_read = cv2.imread(current_image, cv2.IMREAD_GRAYSCALE)
+        ressult_otsu = threshold_otsu(image_read)
+        result_otsu = ((image_read > ressult_otsu) * 255).astype(np.uint8)
+        result_sauvola = threshold_sauvola(image_read)
+        result_sauvola = ((image_read > result_sauvola) * 255).astype(np.uint8)
+        window_size = 25
+        result_niblack = threshold_niblack(image_read, window_size=window_size, k=0.8)
+        result_niblack = ((image_read > result_niblack) * 255).astype(np.uint8)
+
+        img_true = np.array(ground_truth).ravel()
+        img_pred = np.array(result_niblack).ravel()
+        iou_niblack = jaccard_similarity_score(img_true, img_pred)
+        cv2.imwrite(os.path.join('..', 'results', image[:-4] + '_' + str(iou_niblack)[:5] + '_niblack_.png'),
+                    result_niblack)
+
+        img_pred = np.array(result_otsu).ravel()
+        iou_otsu = jaccard_similarity_score(img_true, img_pred)
+        cv2.imwrite(os.path.join('..', 'results', image[:-4] + '_' + str(iou_otsu)[:5] + '_otsu_.png'), result_otsu)
+
+        img_pred = np.array(result_sauvola).ravel()
+        iou_sauvola = jaccard_similarity_score(img_true, img_pred)
+        cv2.imwrite(os.path.join('..', 'results', image[:-4] + '_' + str(iou_sauvola)[:5] + '_sauvola_.png'),
+                    result_sauvola)
+
+        img_pred = np.array(result_unet).ravel()
+        iou_unet = jaccard_similarity_score(img_true, img_pred)
+        cv2.imwrite(os.path.join('..', 'results', image[:-4] + '_' + str(iou_unet)[:5] + '_unet_.png'), result_unet)
+
+        results.append([iou_unet, iou_otsu, iou_sauvola, iou_niblack])
+
+    for index, image in enumerate(images):
+        print('Image', image, '- U-Net IoU:', results[index][0], 'Otsu IoU:', results[index][1], 'Sauvola IoU:',
+              results[index][2], 'Niblack IoU:', results[index][3])
+
 
 if __name__ == '__main__':
     check_gpu()
-    myunet = myUnet()
+    my_unet = myUnet()
 
-    # myunet = add_crf_layer(myunet)
+    data_path = 'D:\\Roe\\Medium\\data\\augmentations'
+    checkpoint_file = 'unet_testing_dataset.hdf5'
+    my_unet.train(data_path, checkpoint_file, epochs=2)
 
-    myunet.train()
+    #If you want to test the model just uncomment the following code
+    #Pre-trained model
+    # model = os.path.join('..', 'model', 'unet_4605_dataset.hdf5')
+    # test_predict(my_unet, model)
 
-
-    testing = 'D:\\Roe\\Medium\\prjs\\u_net\\tests\\395.jpg'
-    testing = 'D:\\Roe\\Medium\\data\\dibco\\originals\\HW7.png'
-    testing = 'D:\\Roe\\Medium\\data\ICDAR\\2017\\Originals\\6-IMG_MAX_1005569.jpg'
-    #myunet.binarise_image(model_weights='unet_4605_dataset.hdf5', input_image=testing)
-
-    #myunet.load_predict()
-    # myunet.save_img()
